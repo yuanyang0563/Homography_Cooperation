@@ -11,8 +11,9 @@ find_package(geometry_msgs REQUIRED)
 add_executable(regulation src/regulation.cpp)
 ament_target_dependencies(regulation rclcpp sensor_msgs geometry_msgs)
 
-find_package(cv_bridge REQUIRED)
-find_package(OpenCV REQUIRED)
+find_package(VISP REQUIRED)
+include_directories(${VISP_INCLUDE_DIRS})
 
 add_executable(ibvs src/ibvs.cpp)
-ament_target_dependencies(ibvs rclcpp sensor_msgs geometry_msgs cv_bridge OpenCV)
+ament_target_dependencies(ibvs rclcpp sensor_msgs geometry_msgs)
+target_link_libraries(ibvs ${VISP_LIBRARIES})
