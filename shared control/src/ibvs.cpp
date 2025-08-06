@@ -6,17 +6,20 @@
 #include <eigen3/Eigen/Dense>
 
 #include <visp3/detection/vpDetectorAprilTag.h>
-#include <visp3/core/vpPixelMeterConversion.h>
 #include <visp3/core/vpCameraParameters.h>
-#include <visp3/core/vpImageConvert.h>
-#include <visp3/gui/vpDisplayX.h>
 #include <visp3/core/vpDisplay.h>
-#include <visp3/core/vpConfig.h>
+#include <visp3/gui/vpDisplayX.h>
 
 Eigen::Vector3f skewVec (const Eigen::Matrix3f& R) {
 	Eigen::Matrix3f S = 0.5*(R-R.transpose());
 	Eigen::Vector3f v(S(2,1),S(0,2),S(1,0));
 	return v;
+}
+
+Eigen::Matrix3f skewMat (const Eigen::Vector3f& v) {
+	Eigen::Matrix3f R;
+	R << 0.0, -v(2), v(1), v(2), 0.0, -v(0), -v(1), v(0), 0.0;
+	return R;
 }
 
 class manipulator {
@@ -27,13 +30,12 @@ class manipulator {
     	rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_vel;
     	rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr sub_js;
     	rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_img;
-    	Eigen::VectorXf a, alpha, d, theta;
-    	Eigen::VectorXf q;
-    	Eigen::Vector3f xco, xec, xe, xc, xd;
-    	Eigen::Matrix3f Rco, Rec, Re, Rc, Rd;
-    	Eigen::VectorXf s, sd;
-    	Eigen::Vector3f upsilon, omega;
-    	bool flag_js;
+    	Eigen::VectorXf a, alpha, d, theta, q;
+    	Eigen::Vector3f xco, xec, xe, xc;
+    	Eigen::Matrix3f Rco, Rec, Re, Rc;
+    	Eigen::VectorXf s, sd, twist;
+    	Eigen::MatrixXf L, Tec;
+    	float lambda;
     	double tagSize;
     	vpDisplayX display;
     	vpCameraParameters camera;
@@ -41,7 +43,8 @@ class manipulator {
     	vpDetectorAprilTag detector;
     	vpHomogeneousMatrix cMo;
     	std::vector<vpImagePoint> tagsCorners;
-    	bool flag_at;
+    	bool flag_js, flag_at;
+    	bool flag_init, flag_stop;
     	
     	manipulator (std::string name) {
     		node = std::make_shared<rclcpp::Node>(name);
@@ -55,9 +58,15 @@ class manipulator {
     		q = Eigen::VectorXf(7);
     		s = Eigen::VectorXf(8);
     		sd = Eigen::VectorXf(8);
+    		L = Eigen::MatrixXf(8, 6);
+    		lambda = 0.5;
     		xec << 0.0, 0.055, 0.0;
     		Rec << -1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0;
-    		flag_js = false;
+    		Tec = Eigen::MatrixXf(6, 6);
+    		Tec.block(0,0,3,3) = Rec;
+    		Tec.block(0,3,3,3) = skewMat(xec)*Rec;
+    		Tec.block(3,0,3,3) = Eigen::Matrix3f::Zero();
+    		Tec.block(3,3,3,3) = Rec;
     		tagSize = 0.08;
     		camera.initPersProjWithoutDistortion(1297.7, 1298.6, 620.9, 238.3);
     		image.resize(720, 1280);
@@ -66,12 +75,14 @@ class manipulator {
     		detector.setAprilTagQuadDecimate(2);
     		detector.setAprilTagNbThreads(1);
     		detector.setAprilTagPoseEstimationMethod(vpDetectorAprilTag::HOMOGRAPHY_VIRTUAL_VS);
+    		flag_js = false;
     		flag_at = false;
+    		flag_init = false;
+    		flag_stop = false;
     	}
     	
     	void joint_state_callback (const sensor_msgs::msg::JointState::SharedPtr msg) {
     		q << msg->position[0], msg->position[2], msg->position[5], msg->position[3], msg->position[4], msg->position[6], msg->position[7];
-    		getPose(q);
     		if (!flag_js)
     			flag_js = true;
     	}
@@ -83,7 +94,7 @@ class manipulator {
                 			image[i][j] = msg->data[i*msg->step+3*j];
             		}
 			flag_at = detector.detect(image);
-			getFeatures(image);
+			getFeatures();
 			vpDisplay::display(image);
 			if (flag_at)
 				vpDisplay::displayFrame(image, cMo, camera, tagSize, vpColor::none, 2);
@@ -93,7 +104,7 @@ class manipulator {
     		}
     	}
     	
-    	void getPose (const Eigen::VectorXf& q) {
+    	void getPose () {
     		a << 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0;
     		alpha << -M_PI/2.0, M_PI/2.0, -M_PI/2.0, M_PI/2.0, -M_PI/2.0, M_PI/2.0, 0.0;
     		d << 0.1564+0.1284, -0.0054-0.0064, 0.2104+0.2104, -0.0064-0.0064, 0.2084+0.1059, 0.0, 0.1059+0.0615;
@@ -122,7 +133,7 @@ class manipulator {
     		Rc = Re*Rec;
     	}
     	
-    	void getFeatures (const vpImage<unsigned char>& image) {
+    	void getFeatures () {
     		if (flag_at) {
     			detector.getPose(0, tagSize, camera, cMo);
     			for (size_t i=0; i<3; ++i) {
@@ -132,26 +143,38 @@ class manipulator {
     			}
     			tagsCorners = detector.getTagsCorners()[0];
     			for (size_t i=0; i<4; ++i) {
-    				s(2*i+0) = tagsCorners[i].get_u();
-    				s(2*i+1) = tagsCorners[i].get_v();
+    				s(2*i+0) = (tagsCorners[i].get_u()-camera.get_u0())*camera.get_px_inverse();
+    				s(2*i+1) = (tagsCorners[i].get_v()-camera.get_v0())*camera.get_py_inverse();
+    			}
+    			if (!flag_init) {
+    				sd = s;
+    				flag_init = true;
     			}
     		}
     	}
     	
     	void setTwist () {
-    		upsilon = 0.5*Re.transpose()*(xd-xc);
-    		omega = 10.0*Re.transpose()*skewVec(Rd*Rc.transpose());
-    		
+    		for (size_t i=0; i<4; ++i) {
+    			float x = s(2*i+0);
+    			float y = s(2*i+1);
+    			L.row(2*i+0) << -1.0, 0.0, x, x*y, -(1.0+x*x), y;
+    			L.row(2*i+1) << 0.0, -1.0, y, 1.0+y*y, -x*y, -x;
+    		}
+    		if (flag_stop)
+    			twist.setZero();
+    		else
+    			twist = lambda*Tec*(L.transpose()*L).inverse()*L.transpose()*(sd-s);
     		auto msg = geometry_msgs::msg::Twist();
-    		msg.linear.x = upsilon(0);
-    		msg.linear.y = upsilon(1);
-    		msg.linear.z = upsilon(2);
-    		msg.angular.x = omega(0);
-    		msg.angular.y = omega(1);
-    		msg.angular.z = omega(2);
-    		if (flag_js)
+    		msg.linear.x = twist(0);
+    		msg.linear.y = twist(1);
+    		msg.linear.z = twist(2);
+    		msg.angular.x = twist(3);
+    		msg.angular.y = twist(4);
+    		msg.angular.z = twist(5);
+    		if (flag_init)
     			pub_vel->publish(msg);
     	}
+    	
 };
 
 
@@ -162,14 +185,14 @@ int main (int argc, char **argv) {
 	rclcpp::Rate loop_rate(100);
 	manipulator arm("gen3");
 	
-	arm.xd << 0.0, -0.6, 0.4;
-	arm.Rd << -1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0;
-	
 	while (rclcpp::ok()) {
 		arm.setTwist();
 		rclcpp::spin_some(arm.node);
 		loop_rate.sleep();
 	}
+	arm.flag_stop = true;
+	arm.setTwist();
+	rclcpp::spin_some(arm.node);
 	rclcpp::shutdown();
 	
 	return 0;
