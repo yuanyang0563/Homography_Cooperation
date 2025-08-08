@@ -7,8 +7,11 @@
 
 #include <visp3/detection/vpDetectorAprilTag.h>
 #include <visp3/core/vpCameraParameters.h>
+#include <visp3/vision/vpHomography.h>
 #include <visp3/core/vpDisplay.h>
 #include <visp3/gui/vpDisplayX.h>
+
+#include <csignal>
 
 Eigen::Vector3f skewVec (const Eigen::Matrix3f& R) {
 	Eigen::Matrix3f S = 0.5*(R-R.transpose());
@@ -20,6 +23,12 @@ Eigen::Matrix3f skewMat (const Eigen::Vector3f& v) {
 	Eigen::Matrix3f R;
 	R << 0.0, -v(2), v(1), v(2), 0.0, -v(0), -v(1), v(0), 0.0;
 	return R;
+}
+
+
+std::atomic_bool flag_stop = false;
+void signalHandler (int signum) {
+    	flag_stop = true;
 }
 
 class manipulator {
@@ -34,8 +43,10 @@ class manipulator {
     	Eigen::Vector3f xco, xec, xe, xc, xd;
     	Eigen::Matrix3f Rco, Rec, Re, Rc, Rd;
     	Eigen::VectorXf s, sd, twist;
-    	Eigen::MatrixXf L, Tec, Tco;
-    	float lambda;
+    	Eigen::MatrixXf L, J, Tec, Tco;
+    	Eigen::Matrix3f Hc;
+    	Eigen::Vector3f ncd, mcd;
+    	float lambda, lambda_u, lambda_o;
     	double tagSize;
     	vpDisplayX display;
     	vpCameraParameters camera;
@@ -43,6 +54,7 @@ class manipulator {
     	vpDetectorAprilTag detector;
     	vpHomogeneousMatrix cMo;
     	std::vector<vpImagePoint> tagsCorners;
+    	std::vector<std::vector<double>> p, pd;
     	bool flag_js, flag_at, flag_init;
     	
     	manipulator (std::string name) {
@@ -59,7 +71,9 @@ class manipulator {
     		sd = Eigen::VectorXf(8);
     		twist = Eigen::VectorXf(6);
     		L = Eigen::MatrixXf(8, 6);
-    		lambda = 0.5;
+    		J = Eigen::MatrixXf(6, 6);
+    		lambda_u = 0.5;
+    		lambda_o = 50.0;
     		xec << 0.0, 0.055, 0.0;
     		Rec << -1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0;
     		Tec = Eigen::MatrixXf(6, 6);
@@ -68,6 +82,7 @@ class manipulator {
     		Tec.block(3,0,3,3) = Eigen::Matrix3f::Zero();
     		Tec.block(3,3,3,3) = Rec;
     		Tco = Eigen::MatrixXf(6, 6);
+    		ncd << 0.0, 0.0, 1.0;
     		tagSize = 0.08;
     		camera.initPersProjWithoutDistortion(1297.7, 1298.6, 620.9, 238.3);
     		image.resize(720, 1280);
@@ -76,6 +91,12 @@ class manipulator {
     		detector.setAprilTagQuadDecimate(2);
     		detector.setAprilTagNbThreads(1);
     		detector.setAprilTagPoseEstimationMethod(vpDetectorAprilTag::HOMOGRAPHY_VIRTUAL_VS);
+    		p.resize(2);
+    		pd.resize(2);
+    		for (size_t i=0; i<2; ++i) {
+    			p[i].resize(4);
+    			pd[i].resize(4);
+    		}
     		flag_js = false;
     		flag_at = false;
     		flag_init = false;
@@ -143,11 +164,15 @@ class manipulator {
     			for (size_t i=0; i<4; ++i) {
     				s(2*i+0) = (tagsCorners[i].get_u()-camera.get_u0())*camera.get_px_inverse();
     				s(2*i+1) = (tagsCorners[i].get_v()-camera.get_v0())*camera.get_py_inverse();
+    				p[0][i] = (tagsCorners[i].get_u()-camera.get_u0())*camera.get_px_inverse();
+    				p[1][i] = (tagsCorners[i].get_v()-camera.get_v0())*camera.get_py_inverse();
     			}
     			if (!flag_init) {
     				xd = xco;
     				Rd = Rco;
     				sd = s;
+    				pd = p;
+    				mcd << 0.25*(p[0][0]+p[0][1]+p[0][2]+p[0][3]), 0.25*(p[1][0]+p[1][1]+p[1][2]+p[1][3]), 1.0;
     				flag_init = true;
     			}
     		}
@@ -155,14 +180,22 @@ class manipulator {
     	
     	void setTwist () {
     		twist.setZero();
-    		if (flag_init) {
-    			for (size_t i=0; i<4; ++i) {
-    				float x = s(2*i+0);
-    				float y = s(2*i+1);
-    				L.row(2*i+0) << -1.0, 0.0, x, x*y, -(1.0+x*x), y;
-    				L.row(2*i+1) << 0.0, -1.0, y, 1.0+y*y, -x*y, -x;
+    		if (flag_init && !flag_stop) {
+    			vpHomography H;
+    			vpHomography::DLT(pd[0], pd[1], p[0], p[1], H, true);
+    			H /= H[2][2];
+    			for (size_t i=0; i<3; ++i) {
+    				for (size_t j=0; j<3; ++j)
+    					Hc(i,j) = H[i][j];
     			}
-    			twist = lambda*Tec*(L.transpose()*L).inverse()*L.transpose()*(sd-s);
+    			J.block(0,0,3,3) = ncd.transpose()*mcd*Eigen::Matrix3f::Identity();
+    			J.block(0,3,3,3) = -skewMat(Hc*mcd);
+    			J.block(3,0,3,3) = 0.5*skewMat(ncd);
+    			J.block(3,3,3,3) = 0.5*(Hc.trace()*Eigen::Matrix3f::Identity()-Hc);
+    			twist << (Hc-Eigen::Matrix3f::Identity())*mcd, skewVec(Hc);
+    			twist = Tec*J.transpose()*(J*J.transpose()).inverse()*twist;
+    			twist.head(3) *= lambda_u;
+    			twist.tail(3) *= lambda_o;
     		}
     		auto msg = geometry_msgs::msg::Twist();
     		msg.linear.x = twist(0);
@@ -184,13 +217,15 @@ int main (int argc, char **argv) {
 	rclcpp::Rate loop_rate(100);
 	manipulator arm("gen3");
 	
-	while (rclcpp::ok()) {
+	// make the last twist message be zero before the node shuts down
+	std::signal(SIGINT, signalHandler);
+	
+	while (rclcpp::ok() && !flag_stop) {
 		arm.getFeatures();
 		arm.setTwist();
 		rclcpp::spin_some(arm.node);
 		loop_rate.sleep();
 	}
-	arm.flag_init = false;
 	arm.setTwist();
 	rclcpp::shutdown();
 	

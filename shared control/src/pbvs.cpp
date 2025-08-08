@@ -35,7 +35,7 @@ class manipulator {
     	Eigen::Matrix3f Rco, Rec, Re, Rc, Rd;
     	Eigen::VectorXf s, sd, twist;
     	Eigen::MatrixXf L, Tec, Tco;
-    	float lambda;
+    	float lambda, lambda_u, lambda_o;
     	double tagSize;
     	vpDisplayX display;
     	vpCameraParameters camera;
@@ -59,7 +59,8 @@ class manipulator {
     		sd = Eigen::VectorXf(8);
     		twist = Eigen::VectorXf(6);
     		L = Eigen::MatrixXf(8, 6);
-    		lambda = 0.5;
+    		lambda_u = 0.5;
+    		lambda_o = 2.5;
     		xec << 0.0, 0.055, 0.0;
     		Rec << -1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0;
     		Tec = Eigen::MatrixXf(6, 6);
@@ -83,8 +84,7 @@ class manipulator {
     	
     	void joint_state_callback (const sensor_msgs::msg::JointState::SharedPtr msg) {
     		q << msg->position[0], msg->position[2], msg->position[5], msg->position[3], msg->position[4], msg->position[6], msg->position[7];
-    		if (!flag_js)
-    			flag_js = true;
+    		flag_js = true;
     	}
     	
     	void camera_image_callback (const sensor_msgs::msg::Image::SharedPtr msg) {
@@ -161,8 +161,8 @@ class manipulator {
     			Tco.block(0,3,3,3) = -skewMat(xco)*Rco;
     			Tco.block(3,0,3,3) = Eigen::Matrix3f::Zero();
     			Tco.block(3,3,3,3) = -Rco;
-    			twist << Rco.transpose()*(xd-xco), skewVec(Rco.transpose()*Rd);
-    			twist = lambda*Tec*Tco*twist;
+    			twist << lambda_u*Rco.transpose()*(xd-xco), lambda_o*skewVec(Rco.transpose()*Rd);
+    			twist = Tec*Tco*twist;
     		}
     		auto msg = geometry_msgs::msg::Twist();
     		msg.linear.x = twist(0);
