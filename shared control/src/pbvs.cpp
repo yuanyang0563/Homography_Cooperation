@@ -157,13 +157,12 @@ class manipulator {
     	void setTwist () {
     		twist.setZero();
     		if (flag_init) {
-    			for (size_t i=0; i<4; ++i) {
-    				float x = s(2*i+0);
-    				float y = s(2*i+1);
-    				L.row(2*i+0) << -1.0, 0.0, x, x*y, -(1.0+x*x), y;
-    				L.row(2*i+1) << 0.0, -1.0, y, 1.0+y*y, -x*y, -x;
-    			}
-    			twist = lambda*Tec*(L.transpose()*L).inverse()*L.transpose()*(sd-s);
+    			Tco.block(0,0,3,3) = -Rco;
+    			Tco.block(0,3,3,3) = -skewMat(xco)*Rco;
+    			Tco.block(3,0,3,3) = Eigen::Matrix3f::Zero();
+    			Tco.block(3,3,3,3) = -Rco;
+    			twist << Rco.transpose()*(xd-xco), skewVec(Rco.transpose()*Rd);
+    			twist = lambda*Tec*Tco*twist;
     		}
     		auto msg = geometry_msgs::msg::Twist();
     		msg.linear.x = twist(0);
