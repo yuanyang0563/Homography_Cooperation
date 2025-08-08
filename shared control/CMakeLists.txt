@@ -17,3 +17,7 @@ include_directories(${VISP_INCLUDE_DIRS})
 add_executable(ibvs src/ibvs.cpp)
 ament_target_dependencies(ibvs rclcpp sensor_msgs geometry_msgs)
 target_link_libraries(ibvs ${VISP_LIBRARIES})
+
+add_executable(pbvs src/pbvs.cpp)
+ament_target_dependencies(pbvs rclcpp sensor_msgs geometry_msgs)
+target_link_libraries(pbvs ${VISP_LIBRARIES})
