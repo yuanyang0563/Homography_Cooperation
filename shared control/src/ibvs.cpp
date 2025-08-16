@@ -10,6 +10,8 @@
 #include <visp3/core/vpDisplay.h>
 #include <visp3/gui/vpDisplayX.h>
 
+#include <csignal>
+
 Eigen::Vector3f skewVec (const Eigen::Matrix3f& R) {
 	Eigen::Matrix3f S = 0.5*(R-R.transpose());
 	Eigen::Vector3f v(S(2,1),S(0,2),S(1,0));
@@ -20,6 +22,11 @@ Eigen::Matrix3f skewMat (const Eigen::Vector3f& v) {
 	Eigen::Matrix3f R;
 	R << 0.0, -v(2), v(1), v(2), 0.0, -v(0), -v(1), v(0), 0.0;
 	return R;
+}
+
+std::atomic_bool flag_stop = false;
+void signalHandler (int signum) {
+    	flag_stop = true;
 }
 
 class manipulator {
@@ -59,7 +66,7 @@ class manipulator {
     		sd = Eigen::VectorXf(8);
     		twist = Eigen::VectorXf(6);
     		L = Eigen::MatrixXf(8, 6);
-    		lambda = 0.5;
+    		lambda = 0.25;
     		xec << 0.0, 0.055, 0.0;
     		Rec << -1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0;
     		Tec = Eigen::MatrixXf(6, 6);
@@ -68,7 +75,7 @@ class manipulator {
     		Tec.block(3,0,3,3) = Eigen::Matrix3f::Zero();
     		Tec.block(3,3,3,3) = Rec;
     		Tco = Eigen::MatrixXf(6, 6);
-    		tagSize = 0.08;
+    		tagSize = 0.04;
     		camera.initPersProjWithoutDistortion(1297.7, 1298.6, 620.9, 238.3);
     		image.resize(720, 1280);
     		display.init(image, 0, 0, "Camera Image");
@@ -109,12 +116,9 @@ class manipulator {
     		theta << -q(0), q(1), -q(2), q(3), -q(4), q(5), -q(6);
     		Eigen::Matrix4f T;
     		T << cos(-M_PI/4.0), -sin(-M_PI/4.0), 0.0, 0.0,
-    		     sin(-M_PI/4.0),  cos(-M_PI/4.0), 0.0, 0.0,
-    		     0.0,             0.0,            1.0, 0.0,
+    		     sin(-M_PI/4.0),  cos(-M_PI/4.0), 0.0, 0.44,
+    		     0.0,             0.0,            1.0, 0.02,
     		     0.0,             0.0,            0.0, 1.0;
-    		Eigen::Matrix<float, 3, 8> o, z;
-    		o.col(0) << T.block(0,3,3,1);
-    		z.col(0) << T.block(0,2,3,1);
     		Eigen::Matrix4f A;
     		for (size_t i=0; i<7; ++i) {
     			A << cos(theta(i)), -sin(theta(i))*cos(alpha(i)),  sin(theta(i))*sin(alpha(i)), a(i)*cos(theta(i)),
@@ -122,8 +126,6 @@ class manipulator {
     			     0.0,            sin(alpha(i)),                cos(alpha(i)),               d(i),
     			     0.0,            0.0,                          0.0,                         1.0;
     			T *= A;
-    			o.col(i+1) << T.block(0,3,3,1);
-    			z.col(i+1) << T.block(0,2,3,1);
     		}
     		xe = T.block(0,3,3,1);
     		Re = T.block(0,0,3,3);
@@ -155,7 +157,7 @@ class manipulator {
     	
     	void setTwist () {
     		twist.setZero();
-    		if (flag_init) {
+    		if (flag_init && !flag_stop) {
     			for (size_t i=0; i<4; ++i) {
     				float x = s(2*i+0);
     				float y = s(2*i+1);
@@ -168,9 +170,9 @@ class manipulator {
     		msg.linear.x = twist(0);
     		msg.linear.y = twist(1);
     		msg.linear.z = twist(2);
-    		msg.angular.x = twist(3);
-    		msg.angular.y = twist(4);
-    		msg.angular.z = twist(5);
+    		msg.angular.x = 100.0*twist(3);
+    		msg.angular.y = 100.0*twist(4);
+    		msg.angular.z = 100.0*twist(5);
     		pub_vel->publish(msg);
     	}
     	
@@ -184,13 +186,15 @@ int main (int argc, char **argv) {
 	rclcpp::Rate loop_rate(100);
 	manipulator arm("gen3");
 	
-	while (rclcpp::ok()) {
+	// make the last twist message be zero before the node shuts down
+	std::signal(SIGINT, signalHandler);
+	
+	while (rclcpp::ok() && !flag_stop) {
 		arm.getFeatures();
 		arm.setTwist();
 		rclcpp::spin_some(arm.node);
 		loop_rate.sleep();
 	}
-	arm.flag_init = false;
 	arm.setTwist();
 	rclcpp::shutdown();
 	
