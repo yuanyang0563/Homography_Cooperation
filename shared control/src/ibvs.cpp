@@ -66,7 +66,7 @@ class manipulator {
     		sd = Eigen::VectorXf(8);
     		twist = Eigen::VectorXf(6);
     		L = Eigen::MatrixXf(8, 6);
-    		lambda = 0.25;
+    		lambda = 0.35;
     		xec << 0.0, 0.055, 0.0;
     		Rec << -1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0;
     		Tec = Eigen::MatrixXf(6, 6);
@@ -170,9 +170,9 @@ class manipulator {
     		msg.linear.x = twist(0);
     		msg.linear.y = twist(1);
     		msg.linear.z = twist(2);
-    		msg.angular.x = 100.0*twist(3);
-    		msg.angular.y = 100.0*twist(4);
-    		msg.angular.z = 100.0*twist(5);
+    		msg.angular.x = 100*twist(3);
+    		msg.angular.y = 100*twist(4);
+    		msg.angular.z = 100*twist(5);
     		pub_vel->publish(msg);
     	}
     	

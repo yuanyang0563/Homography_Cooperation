@@ -8,10 +8,22 @@ find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 
-add_executable(regulation src/regulation.cpp)
+include_directories(include)
+
+
+
+add_executable(
+	regulation 
+	src/regulation.cpp 
+	src/manipulator.cpp 
+	src/common.cpp
+)
 ament_target_dependencies(regulation rclcpp sensor_msgs geometry_msgs)
 
+
+
 find_package(VISP REQUIRED)
+
 include_directories(${VISP_INCLUDE_DIRS})
 
 add_executable(ibvs src/ibvs.cpp)

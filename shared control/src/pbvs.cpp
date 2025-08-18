@@ -42,7 +42,7 @@ class manipulator {
     	Eigen::Matrix3f Rco, Rec, Re, Rc, Rd;
     	Eigen::VectorXf s, sd, twist;
     	Eigen::MatrixXf L, Tec, Tco;
-    	float lambda, lambda_u, lambda_o;
+    	float lambda;
     	double tagSize;
     	vpDisplayX display;
     	vpCameraParameters camera;
@@ -66,8 +66,7 @@ class manipulator {
     		sd = Eigen::VectorXf(8);
     		twist = Eigen::VectorXf(6);
     		L = Eigen::MatrixXf(8, 6);
-    		lambda_u = 0.5;
-    		lambda_o = 2.0;
+    		lambda = 1.5;
     		xec << 0.0, 0.055, 0.0;
     		Rec << -1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0;
     		Tec = Eigen::MatrixXf(6, 6);
@@ -163,16 +162,16 @@ class manipulator {
     			Tco.block(0,3,3,3) = -skewMat(xco)*Rco;
     			Tco.block(3,0,3,3) = Eigen::Matrix3f::Zero();
     			Tco.block(3,3,3,3) = -Rco;
-    			twist << lambda_u*Rco.transpose()*(xd-xco), lambda_o*skewVec(Rco.transpose()*Rd);
-    			twist = Tec*Tco*twist;
+    			twist << Rco.transpose()*(xd-xco), skewVec(Rco.transpose()*Rd);
+    			twist = lambda*Tec*Tco*twist;
     		}
     		auto msg = geometry_msgs::msg::Twist();
     		msg.linear.x = twist(0);
     		msg.linear.y = twist(1);
     		msg.linear.z = twist(2);
-    		msg.angular.x = twist(3);
-    		msg.angular.y = twist(4);
-    		msg.angular.z = twist(5);
+    		msg.angular.x = 100.0*twist(3);
+    		msg.angular.y = 100.0*twist(4);
+    		msg.angular.z = 100.0*twist(5);
     		pub_vel->publish(msg);
     	}
     	

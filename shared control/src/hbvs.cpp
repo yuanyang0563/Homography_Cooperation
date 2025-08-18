@@ -25,7 +25,6 @@ Eigen::Matrix3f skewMat (const Eigen::Vector3f& v) {
 	return R;
 }
 
-
 std::atomic_bool flag_stop = false;
 void signalHandler (int signum) {
     	flag_stop = true;
@@ -46,7 +45,7 @@ class manipulator {
     	Eigen::MatrixXf L, J, Tec, Tco;
     	Eigen::Matrix3f Hc;
     	Eigen::Vector3f ncd, mcd;
-    	float lambda, lambda_u, lambda_o;
+    	float lambda;
     	double tagSize;
     	vpDisplayX display;
     	vpCameraParameters camera;
@@ -72,8 +71,7 @@ class manipulator {
     		twist = Eigen::VectorXf(6);
     		L = Eigen::MatrixXf(8, 6);
     		J = Eigen::MatrixXf(6, 6);
-    		lambda_u = 0.5;
-    		lambda_o = 50.0;
+    		lambda = 0.4;
     		xec << 0.0, 0.055, 0.0;
     		Rec << -1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0;
     		Tec = Eigen::MatrixXf(6, 6);
@@ -83,7 +81,7 @@ class manipulator {
     		Tec.block(3,3,3,3) = Rec;
     		Tco = Eigen::MatrixXf(6, 6);
     		ncd << 0.0, 0.0, 1.0;
-    		tagSize = 0.08;
+    		tagSize = 0.04;
     		camera.initPersProjWithoutDistortion(1297.7, 1298.6, 620.9, 238.3);
     		image.resize(720, 1280);
     		display.init(image, 0, 0, "Camera Image");
@@ -130,12 +128,9 @@ class manipulator {
     		theta << -q(0), q(1), -q(2), q(3), -q(4), q(5), -q(6);
     		Eigen::Matrix4f T;
     		T << cos(-M_PI/4.0), -sin(-M_PI/4.0), 0.0, 0.0,
-    		     sin(-M_PI/4.0),  cos(-M_PI/4.0), 0.0, 0.0,
-    		     0.0,             0.0,            1.0, 0.0,
+    		     sin(-M_PI/4.0),  cos(-M_PI/4.0), 0.0, 0.44,
+    		     0.0,             0.0,            1.0, 0.02,
     		     0.0,             0.0,            0.0, 1.0;
-    		Eigen::Matrix<float, 3, 8> o, z;
-    		o.col(0) << T.block(0,3,3,1);
-    		z.col(0) << T.block(0,2,3,1);
     		Eigen::Matrix4f A;
     		for (size_t i=0; i<7; ++i) {
     			A << cos(theta(i)), -sin(theta(i))*cos(alpha(i)),  sin(theta(i))*sin(alpha(i)), a(i)*cos(theta(i)),
@@ -143,8 +138,6 @@ class manipulator {
     			     0.0,            sin(alpha(i)),                cos(alpha(i)),               d(i),
     			     0.0,            0.0,                          0.0,                         1.0;
     			T *= A;
-    			o.col(i+1) << T.block(0,3,3,1);
-    			z.col(i+1) << T.block(0,2,3,1);
     		}
     		xe = T.block(0,3,3,1);
     		Re = T.block(0,0,3,3);
@@ -162,16 +155,16 @@ class manipulator {
     			}
     			tagsCorners = detector.getTagsCorners()[0];
     			for (size_t i=0; i<4; ++i) {
-    				s(2*i+0) = (tagsCorners[i].get_u()-camera.get_u0())*camera.get_px_inverse();
-    				s(2*i+1) = (tagsCorners[i].get_v()-camera.get_v0())*camera.get_py_inverse();
     				p[0][i] = (tagsCorners[i].get_u()-camera.get_u0())*camera.get_px_inverse();
     				p[1][i] = (tagsCorners[i].get_v()-camera.get_v0())*camera.get_py_inverse();
+    				s(2*i+0) = p[0][i];
+    				s(2*i+1) = p[1][i];
     			}
     			if (!flag_init) {
+    				pd = p;
+    				sd = s;
     				xd = xco;
     				Rd = Rco;
-    				sd = s;
-    				pd = p;
     				mcd << 0.25*(p[0][0]+p[0][1]+p[0][2]+p[0][3]), 0.25*(p[1][0]+p[1][1]+p[1][2]+p[1][3]), 1.0;
     				flag_init = true;
     			}
@@ -192,18 +185,25 @@ class manipulator {
     			J.block(0,3,3,3) = -skewMat(Hc*mcd);
     			J.block(3,0,3,3) = 0.5*skewMat(ncd);
     			J.block(3,3,3,3) = 0.5*(Hc.trace()*Eigen::Matrix3f::Identity()-Hc);
-    			twist << (Hc-Eigen::Matrix3f::Identity())*mcd, skewVec(Hc);
-    			twist = Tec*J.transpose()*(J*J.transpose()).inverse()*twist;
-    			twist.head(3) *= lambda_u;
-    			twist.tail(3) *= lambda_o;
+    			Eigen::MatrixXf twist_h(6, 1);
+    			twist_h << (Hc-Eigen::Matrix3f::Identity())*mcd, skewVec(Hc);
+    			twist += lambda*Tec*J.transpose()*(J*J.transpose()).inverse()*twist_h;
+    			
+    			Tco.block(0,0,3,3) = -Rco;
+    			Tco.block(0,3,3,3) = -skewMat(xco)*Rco;
+    			Tco.block(3,0,3,3) = Eigen::Matrix3f::Zero();
+    			Tco.block(3,3,3,3) = -Rco;
+    			Eigen::MatrixXf twist_p(6, 1);
+    			twist_p << Rco.transpose()*(xd-xco), skewVec(Rco.transpose()*Rd);
+    			twist += 2.0*lambda*Tec*Tco*twist_p;
     		}
     		auto msg = geometry_msgs::msg::Twist();
     		msg.linear.x = twist(0);
     		msg.linear.y = twist(1);
     		msg.linear.z = twist(2);
-    		msg.angular.x = twist(3);
-    		msg.angular.y = twist(4);
-    		msg.angular.z = twist(5);
+    		msg.angular.x = 100.0*twist(3);
+    		msg.angular.y = 100.0*twist(4);
+    		msg.angular.z = 100.0*twist(5);
     		pub_vel->publish(msg);
     	}
     	
