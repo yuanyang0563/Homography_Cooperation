@@ -14,9 +14,15 @@
 
 #include <csignal>
 
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <ctime>
+
 extern bool flag_js;
 extern bool flag_at;
 extern bool flag_init;
+extern bool flag_data;
 extern float tagSize;
 extern float lambda_ibvs;
 extern float lambda_pbvs;
