@@ -8,5 +8,7 @@ find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
-add_executable(regulation src/regulation.cpp)
-ament_target_dependencies(regulation rclcpp sensor_msgs std_msgs)
+include_directories(include)
+
+add_executable(control src/control.cpp src/manipulator.cpp src/common.cpp)
+ament_target_dependencies(control rclcpp sensor_msgs std_msgs)
